@@ -803,13 +803,22 @@ runs:
           while [ $attempt -le $max_attempts ]; do
               echo " Attempt $attempt/$max_attempts: High-speed fetch for $repo_name ($branch)"
               
-              if aria2c -x16 -s16 -j16 -k1M --retry-wait=2 --max-tries=5 -d "/dev/shm" -o "$archive_name" --allow-overwrite=true "${aria2_headers[@]}" $aria_log_flags "$download_url"; then
+              aria_err="/dev/shm/${archive_name}.err"
+              : > "$aria_err"
+              if aria2c -x16 -s16 -j16 -k1M --retry-wait=2 --max-tries=5 -d "/dev/shm" -o "$archive_name" --allow-overwrite=true "${aria2_headers[@]}" $aria_log_flags "$download_url" 2>"$aria_err"; then
                   mkdir -p "$repo_name"
                   if tar -I "pigz -p $nproc -b 256" -x --record-size=1M -f "$shm_path" -C "$repo_name" --strip-components=1 --no-same-owner; then
                       echo "✅ Success: $repo_name synced"
                       rm -f "$shm_path"
                       return 0
+                  else
+                      echo "⚠️ tar extraction failed for $archive_name"
                   fi
+              else
+                  echo "⚠️ aria2c download failed (exit $?) for $download_url"
+              fi
+              if [ -s "$aria_err" ]; then
+                  sed 's/^/    [aria2] /' "$aria_err"
               fi
               
               echo "⚠️ Attempt $attempt failed, clearing RAM and retrying..."
@@ -817,6 +826,17 @@ runs:
               sleep 5
               attempt=$((attempt + 1))
           done
+          
+          # Fallback: plain git clone when the archive download keeps failing
+          echo "⚠️ Archive fetch failed, falling back to git clone for $url ($branch)"
+          rm -rf "$repo_name" "$shm_path" "/dev/shm/$archive_name" 2>/dev/null
+          if git clone "$url" "$repo_name"; then
+              if git -C "$repo_name" checkout "$branch"; then
+                  echo "✅ Success: $repo_name cloned via git"
+                  return 0
+              fi
+              echo "⚠️ git checkout '$branch' failed in $repo_name"
+          fi
           
           echo "::error::All attempts failed for $url"
           return 1
