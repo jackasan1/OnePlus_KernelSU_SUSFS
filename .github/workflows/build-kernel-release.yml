@@ -29,6 +29,11 @@ on:
           - android13-5.15
           - android12-5.10
         default: A14+15+16
+      op_device:
+        description: 'Device model filter (e.g. OP-ACE-6T). Empty = all devices matching op_model.'
+        required: false
+        type: string
+        default: ''
       ksu_options:
         description: 'Enter KernelSU build json'
         required: true
@@ -108,6 +113,8 @@ jobs:
       - name: 🔍 Generate build matrix
         id: set-matrix
         shell: bash
+        env:
+          DEVICE_FILTER: ${{ inputs.op_device }}
         run: |
           set -euo pipefail
           echo "::group::Matrix generation"
@@ -172,6 +179,15 @@ jobs:
           
           filtered=$(jq -c "$jq_filter" matrix.json)
           count=$(jq 'length' <<<"$filtered")
+          
+          # 🎯 Optional single-device filter
+          device_filter="${DEVICE_FILTER:-}"
+          if [ -n "$device_filter" ]; then
+            echo "🎯 Device filter applied: '$device_filter'"
+            filtered=$(jq -c --arg d "$device_filter" 'map(select((.model | ascii_downcase) == ($d | ascii_downcase)))' <<<"$filtered")
+            count=$(jq 'length' <<<"$filtered")
+            echo "   Matching devices: $count"
+          fi
           
           filtered=$(echo "$filtered" | jq '
             sort_by(
